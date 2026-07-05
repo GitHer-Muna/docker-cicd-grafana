@@ -66,9 +66,9 @@ jobs:
           node bin/wire-metrics.js
 
           # Verify the patching succeeded
-          grep -q "http_requests_total" src/server.js || { echo '✗ metrics wiring failed'; exit 1; }
-          grep -q "app.get('/metrics'" src/server.js || { echo '✗ /metrics route not found'; exit 1; }
-          echo '✓ Metrics wiring verified'
+          grep -q "http_requests_total" src/server.js || { echo 'Metrics wiring failed'; exit 1; }
+          grep -q "app.get('"'"'/metrics'"'"'" src/server.js || { echo 'Metrics route not found'; exit 1; }
+          echo 'Metrics wiring verified'
 
       # ── AWS credentials ──────────────────────────────────────────
       - name: Configure AWS credentials
@@ -119,38 +119,41 @@ jobs:
             cd ~/herwell
             git pull origin main
 
-            # Ensure AWS CLI is available (Amazon Linux 2023)
+            # Ensure AWS CLI is available
             which aws >/dev/null 2>&1 || sudo dnf install -y aws-cli
 
-            # Ensure .env exists with all required variables
+            # Ensure .env exists
             if [ ! -f .env ]; then
-              echo 'Creating .env from .env.example...'
+              echo "Creating .env from .env.example..."
               cp .env.example .env
             fi
 
-            # Auto-fill any missing or placeholder values
-            # (keeps existing values intact, only replaces placeholders)
-            for VAR in JWT_SECRET DB_PASSWORD POSTGRES_PASSWORD GF_SECURITY_ADMIN_PASSWORD; do
-              VAL=$(grep "^${VAR}=" .env | cut -d= -f2-)
-              if [ -z "$VAL" ] || echo "$VAL" | grep -qi "change\|replace\|changeme"; then
-                NEW_VAL=$(openssl rand -hex 32)
-                echo "⚙ Generating ${VAR}..."
-                # Use | as sed delimiter to avoid issues with / in values
-                if grep -q "^${VAR}=" .env; then
-                  sed -i "s|^${VAR}=.*|${VAR}=${NEW_VAL}|" .env
-                else
-                  echo "${VAR}=${NEW_VAL}" >> .env
-                fi
-              fi
-            done
-            # Also ensure CORS_ORIGIN is set to the actual EC2 IP
-            if grep -q "YOUR_EC2_PUBLIC_IP" .env 2>/dev/null; then
-              echo "⚙ Updating CORS_ORIGIN to current host..."
-              sed -i "s|CORS_ORIGIN=http://YOUR_EC2_PUBLIC_IP|CORS_ORIGIN=http://$(curl -s http://checkip.amazonaws.com 2>/dev/null)|" .env
+            # Auto-generate JWT_SECRET if missing or placeholder (safe - stateless)
+            JWT=$(grep "^JWT_SECRET=" .env | cut -d= -f2-)
+            if [ -z "$JWT" ] || echo "$JWT" | grep -qi "change\|replace\|changeme"; then
+              JWT=$(openssl rand -hex 64)
+              sed -i "s|^JWT_SECRET=.*|JWT_SECRET=${JWT}|" .env
+              echo "Generated JWT_SECRET"
             fi
-            echo "✓ .env ready"
 
-            # Log in to ECR so we can pull the private images
+            # Check DB passwords - only warn, don't regenerate (would break running DB)
+            DB_PW=$(grep "^DB_PASSWORD=" .env | cut -d= -f2-)
+            PG_PW=$(grep "^POSTGRES_PASSWORD=" .env | cut -d= -f2-)
+            if [ -z "$DB_PW" ] || echo "$DB_PW" | grep -qi "change\|replace\|changeme"; then
+              echo "Warning: DB_PASSWORD still has placeholder value in .env"
+              echo "  Keeping it as-is to avoid breaking the database connection."
+            fi
+
+            # Update CORS_ORIGIN to current EC2 IP (always)
+            EC2_IP=$(curl -s http://checkip.amazonaws.com 2>/dev/null | tr -d '\n')
+            if [ -n "$EC2_IP" ]; then
+              sed -i "s|^CORS_ORIGIN=.*|CORS_ORIGIN=http://${EC2_IP}|" .env
+              echo "Updated CORS_ORIGIN to http://${EC2_IP}"
+            fi
+
+            echo "Env config done"
+
+            # Log in to ECR
             aws ecr get-login-password --region "$AWS_REGION" | \
               docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null
 
@@ -158,13 +161,12 @@ jobs:
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
             # Wait for backend to become healthy (up to 2 min)
-            # Uses Docker's built-in HEALTHCHECK (which pings localhost:3001/health internally)
             echo "Waiting for backend to start..."
             BACKEND_OK=false
             for i in $(seq 1 24); do
               HEALTH=$(docker inspect --format='{{.State.Health.Status}}' herwell-backend-1 2>/dev/null || echo "starting")
               if [ "$HEALTH" = "healthy" ]; then
-                echo "✓ Backend healthy after $((i * 5)) seconds"
+                echo "Backend healthy after $((i * 5)) seconds"
                 BACKEND_OK=true
                 break
               fi
@@ -173,7 +175,7 @@ jobs:
             done
 
             if [ "$BACKEND_OK" != "true" ]; then
-              echo "✗ Backend failed to start. Showing logs:"
+              echo "Backend failed to start. Showing logs:"
               docker compose -f docker-compose.prod.yml logs backend --tail=30
               exit 1
             fi
@@ -188,11 +190,11 @@ jobs:
           for i in $(seq 1 12); do
             STATUS=$(curl -s -o /dev/null -w '%{http_code}' http://$EC2_HOST/health 2>/dev/null || echo "000")
             if [ "$STATUS" = "200" ]; then
-              echo "✓ Health check returned 200 after $((i * 5)) seconds"
+              echo "Health check returned 200 after $((i * 5)) seconds"
               exit 0
             fi
             echo "Attempt $i: got $STATUS, retrying in 5s..."
             sleep 5
           done
-          echo "✗ Health check failed after 60 seconds"
+          echo "Health check failed after 60 seconds"
           exit 1

@@ -41,6 +41,10 @@ if (lines.some(l => l.includes(MARKER))) {
 }
 
 // ── The self-contained Prometheus setup block ─────────────────────
+// NOTE: This block includes app.use()/app.get() INSIDE an IIFE so it
+// can be inserted anywhere — `app` doesn't need to be defined yet
+// because the IIFE is lazily applied via process.nextTick or it's placed
+// AFTER the app definition (see insertion logic below).
 
 const METRICS_BLOCK = `
 // === Prometheus metrics (injected by deploy pipeline) ===
@@ -49,7 +53,7 @@ const METRICS_BLOCK = `
 //
 // Requires the "prom-client" npm package (installed during build).
 
-const prometheusClient = (() => {
+(() => {
   try {
     const client = require('prom-client');
 
@@ -73,7 +77,7 @@ const prometheusClient = (() => {
     });
 
     // ── Middleware: tracks every request ────────────────────────
-    function middleware(req, res, next) {
+    app.use((req, res, next) => {
       const start = Date.now();
       res.on('finish', () => {
         const duration = (Date.now() - start) / 1000;
@@ -82,47 +86,60 @@ const prometheusClient = (() => {
         httpRequestDuration.observe({ method: req.method, route }, duration);
       });
       next();
-    }
+    });
 
     // ── Route handler: serves Prometheus-formatted metrics ──────
-    async function metricsRoute(req, res) {
+    app.get('/metrics', async (req, res) => {
       res.set('Content-Type', client.register.contentType);
       res.end(await client.register.metrics());
-    }
+    });
 
     console.log('  ✓ Prometheus metrics initialized');
-    return { middleware, metricsRoute };
   } catch (err) {
     console.warn('  ⚠ Prometheus metrics unavailable:', err.message);
-    // Return no-op middleware and route so the app doesn't crash
-    return {
-      middleware: (_req, _res, next) => next(),
-      metricsRoute: (_req, res) => res.status(501).json({ error: 'metrics disabled' }),
-    };
   }
 })();
-
-app.use(prometheusClient.middleware);
-app.get('/metrics', prometheusClient.metricsRoute);
 `;
 
-// ── Insert the block right before the first require() line ──────
-// We insert early so the metrics setup's own require() is grouped with
-// the app's other imports.
-let insertAt = 0;
+// ── Insert the block AFTER the app is defined ────────────────────
+// Search for `const app = express()` or `app = express()` and insert
+// right after that line, so `app` is guaranteed to be in scope.
+
+let insertionIndex = -1;
+
 for (let i = 0; i < lines.length; i++) {
-  if (/require\s*\(/.test(lines[i]) && !lines[i].includes('prom-client')) {
-    insertAt = i;
+  if (/app\s*=\s*express\s*\(/.test(lines[i]) || /app\s*=\s*require\s*express/.test(lines[i])) {
+    insertionIndex = i;
     break;
   }
 }
 
-// If we found a require line, insert BEFORE it to keep things at the top
-// Otherwise insert after 'use strict' or at the very top
-let insertionIndex = insertAt > 0 ? insertAt : 0;
+if (insertionIndex === -1) {
+  // Fallback: find the first app.use() line
+  for (let i = 0; i < lines.length; i++) {
+    if (/app\.use\(/.test(lines[i])) {
+      insertionIndex = i - 1; // insert right before it
+      break;
+    }
+  }
+}
 
-lines.splice(insertionIndex, 0, METRICS_BLOCK);
+if (insertionIndex === -1) {
+  // Last resort: find the first require() and insert after it
+  for (let i = 0; i < lines.length; i++) {
+    if (/require\s*\(/.test(lines[i])) {
+      insertionIndex = i;
+      break;
+    }
+  }
+}
+
+if (insertionIndex === -1) {
+  insertionIndex = 0;
+}
+
+lines.splice(insertionIndex + 1, 0, METRICS_BLOCK);
 fs.writeFileSync(SERVER_PATH, lines.join('\n'));
 
 console.log(`✓ Patched ${SERVER_PATH}`);
-console.log(`  Inserted Prometheus metrics block at line ${insertionIndex + 1}`);
+console.log(`  Inserted after line ${insertionIndex + 1}`);

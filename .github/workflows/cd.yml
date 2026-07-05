@@ -44,20 +44,27 @@ jobs:
           cp -r herwellness-app/backend/* ./backend/
           cp -r herwellness-app/frontend/* ./frontend/
 
-      # ── Install prom-client and wire up metrics ───────────────────
-      - name: Wire up Prometheus metrics in server.js
+      # ── Install prom-client and wire up all metrics ──────────────
+      - name: Wire up Prometheus metrics
         working-directory: ./backend
         run: |
           # Install prom-client so the metrics module works
           npm install --save prom-client
 
-          # Patch server.js to import and use the metrics module
+          # Patch server.js: start pool monitor + default metrics
           node bin/wire-metrics.js
 
-          # Verify the patching succeeded
-          grep -q "http_requests_total" src/server.js || { echo 'Metrics wiring failed'; exit 1; }
-          grep -q "'/metrics'" src/server.js || { echo 'Metrics route not found'; exit 1; }
-          echo 'Metrics wiring verified'
+          # Patch route handlers: add .inc() calls for app-specific metrics
+          node bin/wire-app-metrics.js
+
+          # Verify server.js patching
+          grep -q "startPoolMonitor" src/server.js || { echo 'Pool monitor wiring failed'; exit 1; }
+          echo 'Server.js metrics wiring verified'
+
+          # Verify route handler patching
+          grep -q "cycleLogsTotal.inc" src/routes/cycles.js || { echo 'Cycle metrics wiring failed'; exit 1; }
+          grep -q "dailyLogsTotal.inc" src/routes/dailyLogs.js || { echo 'Daily log metrics wiring failed'; exit 1; }
+          echo 'Route handler metrics wiring verified'
 
       # ── Patch migrate.js error handling & check scripts ────────────
       - name: Patch migration error handling and check scripts

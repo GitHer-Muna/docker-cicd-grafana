@@ -24,46 +24,23 @@ if (lines.some(l => l.includes(MARKER))) {
 }
 
 const METRICS_BLOCK = `
-// === Prometheus metrics (injected by deploy pipeline) ===
+// === Prometheus app metrics (injected by deploy pipeline) ===
+// Starts the DB pool monitor so herwell_db_connection_pool_size gauge updates.
+// (HTTP request metrics are already handled by the HerWellness app's metrics.js)
 
 (() => {
   try {
     const client = require('prom-client');
-
     try { client.collectDefaultMetrics({ prefix: 'herwell_' }); } catch (_) {}
 
-    const httpRequestsTotal = new client.Counter({
-      name: 'http_requests_total',
-      help: 'Total number of HTTP requests',
-      labelNames: ['method', 'route', 'status_code'],
-    });
+    // Start the pool monitor to update herwell_db_connection_pool_size gauge
+    const { startPoolMonitor } = require('./metrics');
+    const pool = require('./db/pool');
+    startPoolMonitor(pool);
 
-    const httpRequestDuration = new client.Histogram({
-      name: 'http_request_duration_seconds',
-      help: 'Duration of HTTP requests in seconds',
-      labelNames: ['method', 'route'],
-      buckets: [0.01, 0.05, 0.1, 0.3, 0.5, 1, 2, 5],
-    });
-
-    app.use((req, res, next) => {
-      const start = Date.now();
-      res.on('finish', () => {
-        const duration = (Date.now() - start) / 1000;
-        const route = req.route ? req.baseUrl + req.route.path : req.path;
-        httpRequestsTotal.inc({ method: req.method, route, status_code: res.statusCode });
-        httpRequestDuration.observe({ method: req.method, route }, duration);
-      });
-      next();
-    });
-
-    app.get('/metrics', async (req, res) => {
-      res.set('Content-Type', client.register.contentType);
-      res.end(await client.register.metrics());
-    });
-
-    console.log('  ✓ Prometheus metrics initialized');
+    console.log('  ✓ Prometheus app metrics initialized (pool monitor started)');
   } catch (err) {
-    console.warn('  ⚠ Prometheus metrics unavailable:', err.message);
+    console.warn('  ⚠ Prometheus app metrics unavailable:', err.message);
   }
 })();
 `;

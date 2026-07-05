@@ -23,7 +23,7 @@ if (fs.existsSync(CYCLES_PATH)) {
       if (/require\s*\(/.test(lines[i])) lastRequireLine = i;
     }
     if (lastRequireLine >= 0) {
-      lines.splice(lastRequireLine + 1, 0, "const { cycleLogsTotal } = require('../metrics');");
+      lines.splice(lastRequireLine + 1, 0, "const { cycleLogsTotal } = require('../metrics-addon');");
     }
 
     // Add .inc() calls after success responses
@@ -72,7 +72,7 @@ if (fs.existsSync(DAILYLOGS_PATH)) {
       if (/require\s*\(/.test(lines[i])) lastRequireLine = i;
     }
     if (lastRequireLine >= 0) {
-      lines.splice(lastRequireLine + 1, 0, "const { dailyLogsTotal } = require('../metrics');");
+      lines.splice(lastRequireLine + 1, 0, "const { dailyLogsTotal } = require('../metrics-addon');");
     }
 
     // POST upsert success

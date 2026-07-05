@@ -25,8 +25,11 @@ if (lines.some(l => l.includes(MARKER))) {
 
 const METRICS_BLOCK = `
 // === Prometheus app metrics (injected by deploy pipeline) ===
-// Starts the DB pool monitor so herwell_db_connection_pool_size gauge updates.
+// Starts the DB pool monitor and fixes trust proxy for rate limiting.
 // (HTTP request metrics are already handled by the HerWellness app's metrics.js)
+
+// Fix trust proxy so express-rate-limit works behind Nginx
+app.set('trust proxy', 1);
 
 (() => {
   try {
@@ -34,7 +37,7 @@ const METRICS_BLOCK = `
     try { client.collectDefaultMetrics({ prefix: 'herwell_' }); } catch (_) {}
 
     // Start the pool monitor to update herwell_db_connection_pool_size gauge
-    const { startPoolMonitor } = require('./metrics');
+    const { startPoolMonitor } = require('./metrics-addon');
     const pool = require('./db/pool');
     startPoolMonitor(pool);
 

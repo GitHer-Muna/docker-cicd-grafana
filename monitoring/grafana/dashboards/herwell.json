@@ -9,7 +9,7 @@
   "description": "RED-method monitoring dashboard: Rate, Errors, Duration, Business Metrics, and Infrastructure",
   "tags": ["herwell", "application", "infrastructure"],
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "timezone": "browser",
   "editable": true,
   "graphTooltip": 0,
@@ -24,7 +24,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total[5m]))",
+          "expr": "sum(rate(herwell_http_requests_total[5m]))",
           "legendFormat": "Requests/s",
           "refId": "A"
         }
@@ -57,7 +57,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "(sum(rate(http_requests_total{status_code=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))) * 100",
+          "expr": "(sum(rate(herwell_http_requests_total{status_code=~\"5..\"}[5m])) / sum(rate(herwell_http_requests_total[5m]))) * 100",
           "legendFormat": "Errors %",
           "refId": "A"
         }
@@ -99,7 +99,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(herwell_http_request_duration_seconds_bucket[5m])) by (le))",
           "legendFormat": "p99",
           "refId": "A"
         }
@@ -180,7 +180,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total[5m])) by (route)",
+          "expr": "sum(rate(herwell_http_requests_total[5m])) by (route)",
           "legendFormat": "{{ route }}",
           "refId": "A"
         }
@@ -218,22 +218,22 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total{status_code=~\"2..\"}[5m]))",
+          "expr": "sum(rate(herwell_http_requests_total{status_code=~\"2..\"}[5m]))",
           "legendFormat": "2xx Success",
           "refId": "A"
         },
         {
-          "expr": "sum(rate(http_requests_total{status_code=~\"3..\"}[5m]))",
+          "expr": "sum(rate(herwell_http_requests_total{status_code=~\"3..\"}[5m]))",
           "legendFormat": "3xx Redirect",
           "refId": "B"
         },
         {
-          "expr": "sum(rate(http_requests_total{status_code=~\"4..\"}[5m]))",
+          "expr": "sum(rate(herwell_http_requests_total{status_code=~\"4..\"}[5m]))",
           "legendFormat": "4xx Client Error",
           "refId": "C"
         },
         {
-          "expr": "sum(rate(http_requests_total{status_code=~\"5..\"}[5m]))",
+          "expr": "sum(rate(herwell_http_requests_total{status_code=~\"5..\"}[5m]))",
           "legendFormat": "5xx Server Error",
           "refId": "D"
         }
@@ -275,17 +275,17 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(herwell_http_request_duration_seconds_bucket[5m])) by (le))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(herwell_http_request_duration_seconds_bucket[5m])) by (le))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(herwell_http_request_duration_seconds_bucket[5m])) by (le))",
           "legendFormat": "p99",
           "refId": "C"
         }
@@ -330,7 +330,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route))",
+          "expr": "histogram_quantile(0.95, sum(rate(herwell_http_request_duration_seconds_bucket[5m])) by (le, route))",
           "legendFormat": "{{ route }}",
           "refId": "A"
         }
@@ -375,7 +375,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "sum(rate(herwell_cycle_logs_total[1h])) by (action)",
+          "expr": "sum(increase(herwell_cycle_logs_total[1h])) by (action)",
           "legendFormat": "{{ action }}",
           "refId": "A"
         }
@@ -413,8 +413,8 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "rate(herwell_daily_logs_total[1h])",
-          "legendFormat": "Submissions/h",
+          "expr": "increase(herwell_daily_logs_total[1h])",
+          "legendFormat": "Submissions",
           "refId": "A"
         }
       ],

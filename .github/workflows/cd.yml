@@ -57,13 +57,19 @@ jobs:
           # Patch route handlers: add .inc() calls for app-specific metrics
           node bin/wire-app-metrics.js
 
-          # Verify server.js patching
+          # Verify metrics-addon.js is present (survives HerWellness copy)
+          ls -la src/metrics-addon.js || { echo 'metrics-addon.js missing!'; exit 1; }
+
+          # Verify server.js patching (trust proxy + pool monitor)
+          grep -q "app.set('trust proxy'" src/server.js || { echo 'Trust proxy fix missing'; exit 1; }
           grep -q "startPoolMonitor" src/server.js || { echo 'Pool monitor wiring failed'; exit 1; }
           echo 'Server.js metrics wiring verified'
 
-          # Verify route handler patching
-          grep -q "cycleLogsTotal.inc" src/routes/cycles.js || { echo 'Cycle metrics wiring failed'; exit 1; }
-          grep -q "dailyLogsTotal.inc" src/routes/dailyLogs.js || { echo 'Daily log metrics wiring failed'; exit 1; }
+          # Verify route handler patching (imports from metrics-addon)
+          grep -q "metrics-addon" src/routes/cycles.js || { echo 'Cycle metrics should import from metrics-addon'; exit 1; }
+          grep -q "cycleLogsTotal.inc" src/routes/cycles.js || { echo 'Cycle metrics .inc() call missing'; exit 1; }
+          grep -q "metrics-addon" src/routes/dailyLogs.js || { echo 'Daily log metrics should import from metrics-addon'; exit 1; }
+          grep -q "dailyLogsTotal.inc" src/routes/dailyLogs.js || { echo 'Daily log metrics .inc() call missing'; exit 1; }
           echo 'Route handler metrics wiring verified'
 
       # ── Patch migrate.js error handling & check scripts ────────────

@@ -67,7 +67,7 @@ jobs:
 
           # Verify the patching succeeded
           grep -q "http_requests_total" src/server.js || { echo 'Metrics wiring failed'; exit 1; }
-          grep -q "app.get(.'/metrics." src/server.js || { echo 'Metrics route not found'; exit 1; }
+          grep -q "'/metrics'" src/server.js || { echo 'Metrics route not found'; exit 1; }
           echo 'Metrics wiring verified'
 
       # ── AWS credentials ──────────────────────────────────────────

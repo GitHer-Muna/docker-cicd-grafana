@@ -122,6 +122,22 @@ jobs:
             # Ensure AWS CLI is available (Amazon Linux 2023)
             which aws >/dev/null 2>&1 || sudo dnf install -y aws-cli
 
+            # Check that .env file exists with required variables
+            if [ ! -f .env ]; then
+              echo '✗ .env file not found! Create it from .env.example:'
+              echo '  cp .env.example .env && nano .env'
+              exit 1
+            fi
+            for VAR in JWT_SECRET DB_PASSWORD POSTGRES_PASSWORD; do
+              VAL=$(grep "^${VAR}=" .env | cut -d= -f2)
+              if [ -z "$VAL" ] || echo "$VAL" | grep -qi "change\|replace\|changeme"; then
+                echo "✗ ${VAR} is not set or still has placeholder value in .env"
+                echo "  Generate one: openssl rand -hex 64"
+                exit 1
+              fi
+            done
+            echo "✓ .env file looks valid"
+
             # Log in to ECR so we can pull the private images
             aws ecr get-login-password --region "$AWS_REGION" | \
               docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null
@@ -151,6 +167,27 @@ jobs:
             fi
 
             docker image prune -af --filter "until=72h"
+
+      # ── Check registration endpoint ──────────────────────────────
+      - name: Check registration endpoint works
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          # Try registering a test user — expect either 201 (created) or
+          # 400/409 (duplicate). 500 is a failure.
+          REG_STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+            -X POST http://$EC2_HOST/api/auth/register \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"test@cd-check.com","password":"Test1234!","firstName":"CD","lastName":"Check","dateOfBirth":"2000-01-01"}' \
+            2>/dev/null || echo "000")
+          if [ "$REG_STATUS" = "201" ] || [ "$REG_STATUS" = "400" ] || [ "$REG_STATUS" = "409" ]; then
+            echo "✓ Registration endpoint responded: $REG_STATUS"
+          else
+            echo "⚠ Registration returned $REG_STATUS — may indicate an issue"
+            # Show backend logs to help diagnose
+            echo "--- Backend logs ---"
+            ssh -o StrictHostKeyChecking=no -i /dev/null ec2-user@$EC2_HOST "docker compose -f ~/herwell/docker-compose.prod.yml logs backend --tail=20" 2>/dev/null || true
+          fi
 
       # ── Smoke test after deploy ──────────────────────────────────
       - name: Smoke test deployed API

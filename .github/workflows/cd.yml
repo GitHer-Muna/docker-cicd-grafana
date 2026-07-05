@@ -67,7 +67,7 @@ jobs:
 
           # Verify the patching succeeded
           grep -q "http_requests_total" src/server.js || { echo 'Metrics wiring failed'; exit 1; }
-          grep -q "app.get('"'"'/metrics'"'"'" src/server.js || { echo 'Metrics route not found'; exit 1; }
+          grep -q "app.get(.'/metrics." src/server.js || { echo 'Metrics route not found'; exit 1; }
           echo 'Metrics wiring verified'
 
       # ── AWS credentials ──────────────────────────────────────────
@@ -144,11 +144,22 @@ jobs:
               echo "  Keeping it as-is to avoid breaking the database connection."
             fi
 
-            # Update CORS_ORIGIN to current EC2 IP (always)
+            # Update CORS_ORIGIN to current EC2 IP
             EC2_IP=$(curl -s http://checkip.amazonaws.com 2>/dev/null | tr -d '\n')
             if [ -n "$EC2_IP" ]; then
-              sed -i "s|^CORS_ORIGIN=.*|CORS_ORIGIN=http://${EC2_IP}|" .env
+              if grep -q "^CORS_ORIGIN=" .env; then
+                sed -i "s|^CORS_ORIGIN=.*|CORS_ORIGIN=http://${EC2_IP}|" .env
+              else
+                echo "CORS_ORIGIN=http://${EC2_IP}" >> .env
+              fi
               echo "Updated CORS_ORIGIN to http://${EC2_IP}"
+            fi
+
+            # Ensure DB_HOST points to the Docker service name
+            if grep -q "^DB_HOST=" .env; then
+              sed -i "s|^DB_HOST=.*|DB_HOST=db|" .env
+            else
+              echo "DB_HOST=db" >> .env
             fi
 
             echo "Env config done"

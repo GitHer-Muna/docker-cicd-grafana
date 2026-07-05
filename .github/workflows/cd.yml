@@ -128,6 +128,28 @@ jobs:
 
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+            # Wait for backend to become healthy (up to 2 min)
+            # Uses Docker's built-in HEALTHCHECK (which pings localhost:3001/health internally)
+            echo "Waiting for backend to start..."
+            BACKEND_OK=false
+            for i in $(seq 1 24); do
+              HEALTH=$(docker inspect --format='{{.State.Health.Status}}' herwell-backend-1 2>/dev/null || echo "starting")
+              if [ "$HEALTH" = "healthy" ]; then
+                echo "✓ Backend healthy after $((i * 5)) seconds"
+                BACKEND_OK=true
+                break
+              fi
+              echo "Attempt $i: health=$HEALTH"
+              sleep 5
+            done
+
+            if [ "$BACKEND_OK" != "true" ]; then
+              echo "✗ Backend failed to start. Showing logs:"
+              docker compose -f docker-compose.prod.yml logs backend --tail=30
+              exit 1
+            fi
+
             docker image prune -af --filter "until=72h"
 
       # ── Smoke test after deploy ──────────────────────────────────

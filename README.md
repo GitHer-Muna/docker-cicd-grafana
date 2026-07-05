@@ -16,7 +16,6 @@ Containerizing HerWell with Docker, GitHub Actions CI/CD, and Grafana Monitoring
 - [Accessing Services](#accessing-services)
 - [Monitoring](#monitoring)
 - [Troubleshooting](#troubleshooting)
-- [Concepts I Learned](#concepts-i-learned)
 
 ---
 
@@ -374,37 +373,3 @@ docker compose -f docker-compose.prod.yml logs --tail=100 -f
 ```
 
 ---
-
-## Concepts I Learned
-
-### Multi-stage Docker build
-
-A multi-stage build uses multiple `FROM` statements in one Dockerfile. The first stage ("build") has all the build tools (Node, npm, Vite) and compiles the app. The second stage ("serve") copies only the compiled output into a minimal Nginx image. This keeps the final image small — the build tools are discarded. The frontend image drops from ~1 GB to ~50 MB. For the backend we use a single-stage build because the runtime needs Node anyway, but we switch to a non-root user for security.
-
-### Docker bridge network
-
-docker-compose creates a bridge network (`herwell_net`) that all containers join. Containers can reach each other by service name (e.g. `backend`, `db`, `prometheus`) as if they were hostnames. This is DNS-based service discovery built into Docker. No ports need to be exposed to the host — communication stays inside the network, which is both more secure and simpler than mapping ports.
-
-### Why healthchecks matter in Compose
-
-`depends_on` alone only ensures a container is started before another, not that it's ready to accept traffic. A PostgreSQL container can be "running" for 10+ seconds before `pg_isready` succeeds. Without a healthcheck, the backend would crash-loop trying to connect to a database that isn't ready yet. The `condition: service_healthy` tells Compose to wait until the healthcheck passes before starting the dependent service.
-
-### Prometheus's pull model
-
-Unlike push-based systems (where services send metrics to a central collector), Prometheus **pulls** metrics by scraping HTTP endpoints at a configured interval. This means:
-- The monitored service only needs to expose a `/metrics` endpoint (no client library to push)
-- Prometheus controls the scrape schedule (avoids flooding from misbehaving services)
-- If a service goes down, Prometheus knows because metrics stop arriving (vs. a push system that just stops receiving)
-
-### Counter vs Histogram vs Gauge
-
-- **Counter**: A monotonically increasing value that only goes up (or resets to 0 on restart). Use for things like "total requests served" or "total errors". You use `rate()` or `increase()` on counters to see how fast they're growing.
-- **Histogram**: Samples observations (like request latency) and counts them in configurable buckets (e.g. ≤0.01s, ≤0.05s, ≤0.1s). From buckets you can compute percentiles with `histogram_quantile()`. The trade-off is that you choose bucket boundaries upfront.
-- **Gauge**: A value that goes up and down arbitrarily, like current memory usage or connection pool size. The last value is meaningful on its own (unlike counters where only the rate matters).
-
-### Why rate-limiting login endpoints matters for security
-
-Login endpoints are the primary target for brute-force attacks. A single bad actor on a botnet can send thousands of login attempts per second. Rate limiting at the proxy level (Nginx) means the requests never reach your application code — Nginx rejects them before they consume a connection to the backend. The `limit_req_zone` directive uses a shared memory zone to track request rates per IP, and once the burst is exceeded, Nginx returns `503 Service Unavailable` immediately. This is defence in depth: the app also has its own rate limiter (express-rate-limit), but the Nginx layer catches everything first.
-
----
-

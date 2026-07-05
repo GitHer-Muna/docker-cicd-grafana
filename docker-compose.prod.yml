@@ -1,20 +1,9 @@
-# ═════════════════════════════════════════════════════════════════════
-# HerWell — Production Docker Compose Stack
-# ═════════════════════════════════════════════════════════════════════
-# Brings up the full application + monitoring stack on a single host.
-#
-# Usage:
-#   docker compose -f docker-compose.prod.yml up -d
-#   docker compose -f docker-compose.prod.yml logs -f SERVICE_NAME
-#   docker compose -f docker-compose.prod.yml down
-#
-# Requires a `.env` file in the same directory with all variables
-# defined in .env.example.
-# ═════════════════════════════════════════════════════════════════════
+# HerWell - Production Docker Stack
+# 7 services: db, backend, frontend, nginx, prometheus, grafana, node-exporter
+# Usage: docker compose -f docker-compose.prod.yml up -d
 
 services:
 
-  # ── Database ──────────────────────────────────────────────────────
   db:
     image: postgres:15-alpine
     env_file: .env
@@ -30,7 +19,6 @@ services:
     networks:
       - herwell_net
 
-  # ── Backend API ───────────────────────────────────────────────────
   backend:
     build:
       context: ./backend
@@ -40,12 +28,9 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
-    # No ports exposed to host — the backend is only reachable via
-    # the nginx reverse proxy on the internal Docker network.
     networks:
       - herwell_net
 
-  # ── Frontend SPA ──────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
@@ -55,11 +40,9 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
-    # No ports exposed to host — served through nginx.
     networks:
       - herwell_net
 
-  # ── Reverse Proxy (entry point) ───────────────────────────────────
   nginx:
     image: nginx:1.27-alpine
     volumes:
@@ -73,8 +56,6 @@ services:
     networks:
       - herwell_net
 
-  # ── Prometheus (metrics collector) ────────────────────────────────
-  # Port 9090 should be firewalled to your IP only (see README).
   prometheus:
     image: prom/prometheus:v2.53.0
     volumes:
@@ -82,16 +63,12 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.retention.time=15d'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
     ports:
       - "9090:9090"
     restart: unless-stopped
     networks:
       - herwell_net
 
-  # ── Grafana (dashboards & visualisation) ──────────────────────────
-  # Accessible on port 3000. SSH tunnel recommended for security.
   grafana:
     image: grafana/grafana:11.1.0
     volumes:
@@ -107,7 +84,6 @@ services:
     networks:
       - herwell_net
 
-  # ── Node Exporter (host metrics) ──────────────────────────────────
   node-exporter:
     image: prom/node-exporter:v1.8.1
     volumes:
@@ -125,12 +101,10 @@ services:
     networks:
       - herwell_net
 
-# ── Networks ────────────────────────────────────────────────────────
 networks:
   herwell_net:
     driver: bridge
 
-# ── Named Volumes ───────────────────────────────────────────────────
 volumes:
   herwell_pgdata:
     driver: local

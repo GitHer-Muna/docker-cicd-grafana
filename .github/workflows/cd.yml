@@ -1,16 +1,5 @@
-# ═════════════════════════════════════════════════════════════════════
-# HerWell — Continuous Deployment (CD)
-# ═════════════════════════════════════════════════════════════════════
-# On every push to main, builds & pushes Docker images to Amazon ECR,
-# then SSHes into the EC2 instance to pull and redeploy.
-#
-# Permissions note:
-#   id-token: write  — reserved for future OIDC authentication.
-#   contents: read   — needed for actions/checkout.
-#
-# For this project we use AWS access key auth via GitHub Secrets,
-# which is the simpler path appropriate for a learning project.
-# ═════════════════════════════════════════════════════════════════════
+# HerWell - Continuous Deployment
+# Builds Docker images, pushes to ECR, SSHes into EC2, and redeploys
 
 name: CD
 
@@ -256,9 +245,6 @@ jobs:
             fi
 
             docker image prune -af --filter "until=72h"
-
-            # Copy the diagnostic script into the container for manual debugging
-            docker cp ~/herwell/backend/bin/db-connectivity-test.js herwell-backend-1:/app/bin/db-connectivity-test.js 2>/dev/null || true
 
             # ── Database migration ────────────────────────────────────────
             echo "=== Running database migrations ==="

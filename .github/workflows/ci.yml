@@ -1,13 +1,5 @@
-# ═════════════════════════════════════════════════════════════════════
-# HerWell — Continuous Integration (CI)
-# ═════════════════════════════════════════════════════════════════════
-# Runs on every pull request targeting main.
-#
-# Jobs:
-#   1. backend-test   — lint + test the Express API against Postgres
-#   2. frontend-build — build the Vite React app
-#   3. docker-build   — verify both Docker images build and backend runs
-# ═════════════════════════════════════════════════════════════════════
+# HerWell - Continuous Integration
+# Runs on PRs: backend tests, frontend build, Docker build check
 
 name: CI
 

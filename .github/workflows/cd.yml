@@ -209,3 +209,21 @@ jobs:
           done
           echo "Health check failed after 60 seconds"
           exit 1
+
+      # ── Diagnostics: show backend logs after every deploy ────────
+      - name: Backend diagnostics
+        if: always()
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            echo "=== Backend container status ==="
+            docker inspect --format='{{.State.Health.Status}}' herwell-backend-1 2>/dev/null || echo "not found"
+            echo ""
+            echo "=== Recent backend logs (last 40 lines) ==="
+            docker compose -f ~/herwell/docker-compose.prod.yml logs --tail=40 backend 2>/dev/null || echo "No logs available"
+            echo ""
+            echo "=== Env vars (names only) ==="
+            docker exec herwell-backend-1 node -e "Object.keys(process.env).filter(k => !k.startsWith('npm_') && !k.startsWith('NODE_') && k !== 'HOME' && k !== 'PATH' && k !== 'PWD' && k !== 'SHLVL' && k !== '_').sort().forEach(k => console.log(k + '=' + (k.includes('PASSWORD') || k.includes('SECRET') || k.includes('KEY') ? '***' : process.env[k]))) 2>/dev/null" 2>/dev/null || echo "Cannot inspect env"

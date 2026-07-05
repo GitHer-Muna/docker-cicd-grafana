@@ -297,18 +297,23 @@ Once Grafana is accessible, you'll see the **HerWell — Application & Infrastru
 
 Panels available:
 
-| Panel | Description |
-|---|---|
-| Total HTTP Requests | Cumulative request count (stat) |
-| Request Rate by Route | Requests per second grouped by route |
-| Error Rate (5xx) | Rate of server errors with yellow/red thresholds |
-| p50 / p95 / p99 Latency | Request latency percentiles |
-| Cycle Logs (24h) | Cycle tracking activity (created/updated/deleted) |
-| Daily Symptom Logs (24h) | Symptom log submission count |
-| DB Connection Pool Size | Active PostgreSQL pool connections (gauge) |
-| Host CPU Usage % | EC2 CPU from Node Exporter |
-| Host Memory Used % | EC2 RAM from Node Exporter |
-| Host Disk Used % (Root) | Root filesystem utilisation |
+| Row | Panel | Description |
+|---|---|---|
+| 1 — RED Summary | Request Rate | Current request rate (req/s) |
+| | Error Rate | % of 5xx errors (yellow ≥1%, red ≥5%) |
+| | p99 Latency | 99th percentile response time |
+| | DB Pool Connections | Active Postgres pool connections |
+| 2 — HTTP Details | Request Rate by Route | req/s broken down by API route |
+| | HTTP Status Codes | Stacked 2xx/3xx/4xx/5xx rates |
+| 3 — Performance | p50/p95/p99 Latency | Response time percentiles over time |
+| | Latency by Route (p95) | Which routes are slowest |
+| 4 — Business | Cycle Log Activity by Action | Cycles created/updated/deleted (bars) |
+| | Daily Symptom Log Submissions | Symptom logs over time (bars) |
+| | DB Connection Pool Over Time | Pool size trend line |
+| 5 — Infrastructure | CPU Usage | EC2 CPU utilisation |
+| | Memory Usage | EC2 RAM utilisation |
+| | Disk Usage | Root filesystem utilisation |
+| 6 — Network | Network I/O | RX/TX bytes per second |
 
 ### Custom Metrics
 

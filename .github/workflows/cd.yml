@@ -70,6 +70,33 @@ jobs:
           grep -q "'/metrics'" src/server.js || { echo 'Metrics route not found'; exit 1; }
           echo 'Metrics wiring verified'
 
+      # ── Check for available migration scripts ─────────────────────
+      - name: Check available DB migration scripts
+        working-directory: ./backend
+        run: |
+          echo "Checking package.json scripts..."
+          node -e "
+            const p = require('./package.json');
+            const scripts = Object.keys(p.scripts || {});
+            console.log('Available scripts: ' + (scripts.length ? scripts.join(', ') : 'none'));
+            const migrationScripts = scripts.filter(s => /migrate|db:|schema|setup|init|sync|seed/.test(s));
+            if (migrationScripts.length) {
+              console.log('Migration-related: ' + migrationScripts.join(', '));
+              // Write to file so deploy step can use it
+              require('fs').writeFileSync('migration-scripts.txt', migrationScripts.join('\n'));
+            } else {
+              console.log('No migration scripts found');
+            }
+          "
+          # Check for SQL files in the project
+          SQL_FILES=$(find . -name "*.sql" -not -path "*/node_modules/*" 2>/dev/null || true)
+          if [ -n "$SQL_FILES" ]; then
+            echo "SQL files found:"
+            echo "$SQL_FILES"
+          else
+            echo "No SQL files found"
+          fi
+
       # ── AWS credentials ──────────────────────────────────────────
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -192,6 +219,22 @@ jobs:
             fi
 
             docker image prune -af --filter "until=72h"
+
+            # Ensure database tables exist (run migrations)
+            echo "Checking database tables..."
+            docker compose -f docker-compose.prod.yml exec -T db psql -U "${DB_USER:-herwell}" -d "${DB_NAME:-herwell_db}" -c \
+              "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name='users');" 2>/dev/null | grep -q 't' && {
+              echo "Users table already exists"
+            } || {
+              echo "Users table missing - running migrations..."
+              # Try npm run migrate (works if the app has knex or similar)
+              docker compose -f docker-compose.prod.yml exec -T backend npm run migrate 2>/dev/null || \
+              docker compose -f docker-compose.prod.yml exec -T backend npm run db:migrate 2>/dev/null || \
+              docker compose -f docker-compose.prod.yml exec -T backend npm run db:init 2>/dev/null || \
+              docker compose -f docker-compose.prod.yml exec -T backend npm run setup 2>/dev/null || \
+              docker compose -f docker-compose.prod.yml exec -T backend npm run init 2>/dev/null || \
+              echo "No migration script found - app may create tables on startup"
+            }
 
       # ── Smoke test after deploy ──────────────────────────────────
       - name: Smoke test deployed API

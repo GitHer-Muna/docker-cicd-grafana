@@ -246,8 +246,8 @@ Push to `main` — the CD workflow will:
 4. Run a smoke test against `/api/health`
 
 If the workflow fails, check the Actions log. Common issues:
-- SSH key format (the private key must be on a single line with `\n` in the secret, or pasted as a multiline secret)
-- EC2 security group not allowing SSH from GitHub Actions IPs (they change; consider GitHub's `actions/runner` IP ranges)
+- SSH key format (the private key must be on a single line with `\n` in the secret, or pasted as a multiline secret).
+- EC2 security group not allowing SSH from GitHub Actions IPs (they change; consider GitHub's `actions/runner` IP ranges).
 
 ### Watching a Deployment
 

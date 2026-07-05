@@ -98,9 +98,19 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: 'AWS_REGION,ECR_REGISTRY,ECR_BACKEND_REPO,ECR_FRONTEND_REPO,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN'
           script: |
+            set -e
             cd ~/herwell
             git pull origin main
+
+            # Ensure AWS CLI is available (Amazon Linux 2023)
+            which aws >/dev/null 2>&1 || sudo dnf install -y aws-cli
+
+            # Log in to ECR so we can pull the private images
+            aws ecr get-login-password --region "$AWS_REGION" | \
+              docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null
+
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
             docker image prune -af --filter "until=72h"

@@ -34,6 +34,7 @@ services:
   backend:
     build:
       context: ./backend
+    image: ${ECR_REGISTRY}/${ECR_BACKEND_REPO}:latest
     env_file: .env
     depends_on:
       db:
@@ -50,6 +51,7 @@ services:
       context: ./frontend
       args:
         VITE_API_URL: ${VITE_API_URL}
+    image: ${ECR_REGISTRY}/${ECR_FRONTEND_REPO}:latest
     depends_on:
       - backend
     restart: unless-stopped

@@ -55,6 +55,21 @@ jobs:
           cp -r herwellness-app/backend/* ./backend/
           cp -r herwellness-app/frontend/* ./frontend/
 
+      # ── Install prom-client and wire up metrics ───────────────────
+      - name: Wire up Prometheus metrics in server.js
+        working-directory: ./backend
+        run: |
+          # Install prom-client so the metrics module works
+          npm install --save prom-client
+
+          # Patch server.js to import and use the metrics module
+          node bin/wire-metrics.js
+
+          # Verify the patching succeeded
+          grep -q "metricsMiddleware" src/server.js || { echo '✗ metrics wiring failed'; exit 1; }
+          grep -q "metricsRoute" src/server.js || { echo '✗ metricsRoute not found'; exit 1; }
+          echo '✓ Metrics wiring verified'
+
       # ── AWS credentials ──────────────────────────────────────────
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4

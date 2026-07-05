@@ -1,0 +1,136 @@
+# ═════════════════════════════════════════════════════════════════════
+# HerWell — Production Docker Compose Stack
+# ═════════════════════════════════════════════════════════════════════
+# Brings up the full application + monitoring stack on a single host.
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml logs -f SERVICE_NAME
+#   docker compose -f docker-compose.prod.yml down
+#
+# Requires a `.env` file in the same directory with all variables
+# defined in .env.example.
+# ═════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── Database ──────────────────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    env_file: .env
+    volumes:
+      - herwell_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-herwell} -d ${POSTGRES_DB:-herwell_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - herwell_net
+
+  # ── Backend API ───────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    # No ports exposed to host — the backend is only reachable via
+    # the nginx reverse proxy on the internal Docker network.
+    networks:
+      - herwell_net
+
+  # ── Frontend SPA ──────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL}
+    depends_on:
+      - backend
+    restart: unless-stopped
+    # No ports exposed to host — served through nginx.
+    networks:
+      - herwell_net
+
+  # ── Reverse Proxy (entry point) ───────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "80:80"
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
+    networks:
+      - herwell_net
+
+  # ── Prometheus (metrics collector) ────────────────────────────────
+  # Port 9090 should be firewalled to your IP only (see README).
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    networks:
+      - herwell_net
+
+  # ── Grafana (dashboards & visualisation) ──────────────────────────
+  # Accessible on port 3000. SSH tunnel recommended for security.
+  grafana:
+    image: grafana/grafana:11.1.0
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    networks:
+      - herwell_net
+
+  # ── Node Exporter (host metrics) ──────────────────────────────────
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+    networks:
+      - herwell_net
+
+# ── Networks ────────────────────────────────────────────────────────
+networks:
+  herwell_net:
+    driver: bridge
+
+# ── Named Volumes ───────────────────────────────────────────────────
+volumes:
+  herwell_pgdata:
+    driver: local
+  grafana_data:
+    driver: local

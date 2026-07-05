@@ -296,32 +296,57 @@ jobs:
           echo "Health check failed after 60 seconds"
           exit 1
 
-      # ── Smoke test: registration ─────────────────────────────────
-      - name: Smoke test - user registration
+      # ── Smoke test: registration + seed test data ───────────────
+      - name: Smoke test - register user and seed app metrics data
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          echo "Testing user registration..."
+          echo "=== Registering test user ==="
+          BASE_URL="http://$EC2_HOST"
           TEST_EMAIL="cd-test-$(date +%s)@herwell-test.local"
-          RESPONSE=$(curl -s -w '\n%{http_code}' -X POST http://$EC2_HOST/api/auth/register \
+          
+          REG=$(curl -s -X POST "$BASE_URL/api/auth/register" \
             -H 'Content-Type: application/json' \
-            -d "{\"email\":\"$TEST_EMAIL\",\"password\":\"TestPass123\",\"first_name\":\"CDTest\",\"date_of_birth\":\"2000-01-01\"}" 2>/dev/null || echo "")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
-          echo "Registration returned HTTP $HTTP_CODE"
-          echo "Response: $(echo $BODY | head -c 500)"
-          if [ "$HTTP_CODE" = "201" ]; then
-            echo "✓ Registration successful"
-            # Extract token for potential cleanup (not needed, test user will just sit in DB)
-            echo "Cleanup: no action needed (test user is harmless)"
-            exit 0
-          elif [ "$HTTP_CODE" = "409" ]; then
-            echo "✓ User already exists (from previous test run) - registration system works"
-            exit 0
-          else
-            echo "✗ Registration failed with HTTP $HTTP_CODE"
+            -d "{\"email\":\"$TEST_EMAIL\",\"password\":\"TestPass123\",\"first_name\":\"CDTest\",\"date_of_birth\":\"2000-01-01\"}")
+          TOKEN=$(echo "$REG" | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.token||'');}catch(e){console.log('')}})")
+          
+          if [ -z "$TOKEN" ]; then
+            # Registration might return 409 (already exists). Try login.
+            echo "Registration may have returned 409 - trying login..."
+            LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
+              -H 'Content-Type: application/json' \
+              -d "{\"email\":\"$TEST_EMAIL\",\"password\":\"TestPass123\"}")
+            TOKEN=$(echo "$LOGIN" | node -e "process.stdin.resume();let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.token||'');}catch(e){console.log('')}})")
+          fi
+          
+          if [ -z "$TOKEN" ]; then
+            echo "✗ Could not obtain auth token"
+            echo "Registration response: $(echo $REG | head -c 300)"
             exit 1
           fi
+          echo "✓ Auth token obtained"
+          
+          AUTH="Authorization: Bearer $TOKEN"
+          
+          # ── Create a test cycle (increments cycleLogsTotal) ────
+          echo "=== Creating test cycle ==="
+          CYCLE_START=$(date -u +%Y-%m-%d)
+          CYCLE=$(curl -s -w '%{http_code}' -X POST "$BASE_URL/api/cycles" \
+            -H "Content-Type: application/json" \
+            -H "$AUTH" \
+            -d "{\"start_date\":\"$CYCLE_START\"}")
+          echo "Create cycle: HTTP $(echo $CYCLE | tail -c 4)"
+          
+          # ── Create a test daily log (increments dailyLogsTotal) ────
+          echo "=== Creating test daily log ==="
+          LOG_DATE=$(date -u +%Y-%m-%d)
+          LOG=$(curl -s -w '%{http_code}' -X POST "$BASE_URL/api/daily-logs" \
+            -H 'Content-Type: application/json' \
+            -H "$AUTH" \
+            -d "{\"log_date\":\"$LOG_DATE\",\"flow_intensity\":\"medium\",\"mood\":[\"good\"],\"symptoms\":[]}")
+          echo "Create daily log: HTTP $(echo $LOG | tail -c 4)"
+          
+          echo "✓ Test data seeded - dashboard should now have data for all metrics"
 
       # ── Diagnostics: show backend logs after every deploy ────────
       - name: Backend diagnostics

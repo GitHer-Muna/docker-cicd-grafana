@@ -70,10 +70,21 @@ jobs:
           grep -q "'/metrics'" src/server.js || { echo 'Metrics route not found'; exit 1; }
           echo 'Metrics wiring verified'
 
-      # ── Check for available migration scripts ─────────────────────
-      - name: Check available DB migration scripts
+      # ── Patch migrate.js error handling & check scripts ────────────
+      - name: Patch migration error handling and check scripts
         working-directory: ./backend
         run: |
+          # Patch migrate.js: the .catch(() => process.exit(1)) silently swallows
+          # connection errors. Add error logging before the exit.
+          if grep -q 'migrate().catch(() => process.exit(1))' src/db/migrate.js; then
+            sed -i 's/migrate().catch(() => process.exit(1))/migrate().catch(err => { console.error("MIGRATION FAILED:", err.message); process.exit(1); })/' src/db/migrate.js
+            echo "Patched migrate.js error handling"
+          fi
+          if grep -q 'migrate().catch(() => process.exit(1))' src/db/migrate_wellness.js; then
+            sed -i 's/migrate().catch(() => process.exit(1))/migrate().catch(err => { console.error("WELLNESS MIGRATION FAILED:", err.message); process.exit(1); })/' src/db/migrate_wellness.js
+            echo "Patched migrate_wellness.js error handling"
+          fi
+
           echo "Checking package.json scripts..."
           node -e "
             const p = require('./package.json');
@@ -82,20 +93,11 @@ jobs:
             const migrationScripts = scripts.filter(s => /migrate|db:|schema|setup|init|sync|seed/.test(s));
             if (migrationScripts.length) {
               console.log('Migration-related: ' + migrationScripts.join(', '));
-              // Write to file so deploy step can use it
               require('fs').writeFileSync('migration-scripts.txt', migrationScripts.join('\n'));
             } else {
               console.log('No migration scripts found');
             }
           "
-          # Check for SQL files in the project
-          SQL_FILES=$(find . -name "*.sql" -not -path "*/node_modules/*" 2>/dev/null || true)
-          if [ -n "$SQL_FILES" ]; then
-            echo "SQL files found:"
-            echo "$SQL_FILES"
-          else
-            echo "No SQL files found"
-          fi
 
       # ── AWS credentials ──────────────────────────────────────────
       - name: Configure AWS credentials
@@ -163,12 +165,25 @@ jobs:
               echo "Generated JWT_SECRET"
             fi
 
-            # Check DB passwords - only warn, don't regenerate (would break running DB)
+            # Fix placeholder DB_PASSWORD by generating a new one AND
+            # recreating the Postgres volume so password stays in sync
             DB_PW=$(grep "^DB_PASSWORD=" .env | cut -d= -f2-)
             PG_PW=$(grep "^POSTGRES_PASSWORD=" .env | cut -d= -f2-)
+            NEEDS_PW_RESET=false
             if [ -z "$DB_PW" ] || echo "$DB_PW" | grep -qi "change\|replace\|changeme"; then
-              echo "Warning: DB_PASSWORD still has placeholder value in .env"
-              echo "  Keeping it as-is to avoid breaking the database connection."
+              echo "DB_PASSWORD is placeholder - generating new password"
+              NEW_PW=$(openssl rand -hex 32)
+              sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=${NEW_PW}|" .env
+              sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${NEW_PW}|" .env
+              NEEDS_PW_RESET=true
+            fi
+            # Also check POSTGRES_PASSWORD independently
+            if [ "$NEEDS_PW_RESET" != "true" ] && ([ -z "$PG_PW" ] || echo "$PG_PW" | grep -qi "change\|replace\|changeme"); then
+              echo "POSTGRES_PASSWORD is placeholder - generating new password"
+              NEW_PW=$(openssl rand -hex 32)
+              sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${NEW_PW}|" .env
+              sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=${NEW_PW}|" .env
+              NEEDS_PW_RESET=true
             fi
 
             # Update CORS_ORIGIN to current EC2 IP
@@ -196,6 +211,15 @@ jobs:
               docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null
 
             docker compose -f docker-compose.prod.yml pull
+
+            # If password was regenerated, blow away the old Postgres volume
+            # so it re-initializes with the new password.
+            # Uses 'down -v' to remove the project-prefixed volume correctly.
+            if [ "$NEEDS_PW_RESET" = "true" ]; then
+              echo "Password changed - recreating Postgres volume..."
+              docker compose -f docker-compose.prod.yml down -v
+            fi
+
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
             # Wait for backend to become healthy (up to 2 min)
@@ -220,10 +244,32 @@ jobs:
 
             docker image prune -af --filter "until=72h"
 
+            # ── Database connectivity test ────────────────────────────────
+            echo "=== Testing database connectivity ==="
+            # Copy the diagnostic script into the container and run it
+            docker cp ~/herwell/backend/bin/db-connectivity-test.js herwell-backend-1:/app/bin/db-connectivity-test.js 2>/dev/null || true
+            docker compose -f docker-compose.prod.yml exec -T backend node \
+              -e '
+                const {Pool} = require("pg");
+                const p = new Pool({
+                  host:     process.env.DB_HOST     || "localhost",
+                  port:     parseInt(process.env.DB_PORT, 10) || 5432,
+                  user:     process.env.DB_USER     || "herwell",
+                  password: process.env.DB_PASSWORD || "",
+                  database: process.env.DB_NAME     || "herwell",
+                  connectionTimeoutMillis: 10000,
+                });
+                p.connect().then(c => { c.release(); p.end(); console.log("DB OK"); process.exit(0); }).catch(e => { console.error("DB FAIL:", e.message); p.end(); process.exit(1); });
+              ' 2>&1 && echo "Database connectivity OK" || {
+              echo "Database connection FAILED!"
+              echo "=== db container logs ==="
+              docker compose -f docker-compose.prod.yml logs db --tail=30
+              echo "=== backend container env ==="
+              docker compose -f docker-compose.prod.yml exec -T backend node -e "console.log('DB_HOST=' + (process.env.DB_HOST||'not-set') + ' DB_PORT=' + (process.env.DB_PORT||'not-set') + ' DB_USER=' + (process.env.DB_USER||'not-set') + ' DB_NAME=' + (process.env.DB_NAME||'not-set') + ' PW_SET=' + (process.env.DB_PASSWORD?'yes':'no'))"
+              exit 1
+            }
+
             # ── Database migration ────────────────────────────────────────
-            # Run migrations to ensure all tables exist.
-            # The HerWellness app has npm run migrate, npm run migrate:wellness,
-            # and npm run migrate:all scripts that create tables + indexes.
             echo "=== Running database migrations ==="
             docker compose -f docker-compose.prod.yml exec -T backend npm run migrate:all 2>&1 || \
               docker compose -f docker-compose.prod.yml exec -T backend npm run migrate 2>&1
@@ -231,7 +277,9 @@ jobs:
             if [ "$MIGRATE_EXIT" -ne 0 ]; then
               echo "Migration failed with exit code $MIGRATE_EXIT"
               echo "=== Backend logs ==="
-              docker compose -f docker-compose.prod.yml logs --tail=30 backend
+              docker compose -f docker-compose.prod.yml logs backend --tail=30
+              echo "=== db container logs ==="
+              docker compose -f docker-compose.prod.yml logs db --tail=20
               exit 1
             fi
             echo "Migrations completed successfully"

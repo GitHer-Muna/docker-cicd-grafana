@@ -1,0 +1,107 @@
+# ═════════════════════════════════════════════════════════════════════
+# HerWell — Continuous Deployment (CD)
+# ═════════════════════════════════════════════════════════════════════
+# On every push to main, builds & pushes Docker images to Amazon ECR,
+# then SSHes into the EC2 instance to pull and redeploy.
+#
+# Permissions note:
+#   id-token: write  — reserved for future OIDC authentication.
+#   contents: read   — needed for actions/checkout.
+#
+# For this project we use AWS access key auth via GitHub Secrets,
+# which is the simpler path appropriate for a learning project.
+# ═════════════════════════════════════════════════════════════════════
+
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+  ECR_BACKEND_REPO: ${{ secrets.ECR_BACKEND_REPO }}
+  ECR_FRONTEND_REPO: ${{ secrets.ECR_FRONTEND_REPO }}
+  VITE_API_URL: ${{ vars.VITE_API_URL }}
+
+jobs:
+
+  build-and-deploy:
+    name: Build, push, and deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── AWS credentials ──────────────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ── ECR login ────────────────────────────────────────────────
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ── Build & push backend ─────────────────────────────────────
+      - name: Build & push backend image
+        id: build-backend
+        env:
+          BACKEND_TAG: ${{ env.ECR_REGISTRY }}/${{ env.ECR_BACKEND_REPO }}
+        run: |
+          docker build -t $BACKEND_TAG:${{ github.sha }} -t $BACKEND_TAG:latest ./backend
+          docker push $BACKEND_TAG:${{ github.sha }}
+          docker push $BACKEND_TAG:latest
+
+      # ── Build & push frontend ────────────────────────────────────
+      - name: Build & push frontend image
+        id: build-frontend
+        env:
+          FRONTEND_TAG: ${{ env.ECR_REGISTRY }}/${{ env.ECR_FRONTEND_REPO }}
+        run: |
+          docker build \
+            --build-arg VITE_API_URL=${{ env.VITE_API_URL }} \
+            -t $FRONTEND_TAG:${{ github.sha }} \
+            -t $FRONTEND_TAG:latest \
+            ./frontend
+          docker push $FRONTEND_TAG:${{ github.sha }}
+          docker push $FRONTEND_TAG:latest
+
+      # ── Deploy on EC2 ────────────────────────────────────────────
+      - name: SSH into EC2 and redeploy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/herwell
+            git pull origin main
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+            docker image prune -af --filter "until=72h"
+
+      # ── Smoke test after deploy ──────────────────────────────────
+      - name: Smoke test deployed API
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w '%{http_code}' http://$EC2_HOST/health 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✓ Health check returned 200 after $((i * 5)) seconds"
+              exit 0
+            fi
+            echo "Attempt $i: got $STATUS, retrying in 5s..."
+            sleep 5
+          done
+          echo "✗ Health check failed after 60 seconds"
+          exit 1

@@ -165,27 +165,6 @@ jobs:
               echo "Generated JWT_SECRET"
             fi
 
-            # Fix placeholder DB_PASSWORD by generating a new one AND
-            # recreating the Postgres volume so password stays in sync
-            DB_PW=$(grep "^DB_PASSWORD=" .env | cut -d= -f2-)
-            PG_PW=$(grep "^POSTGRES_PASSWORD=" .env | cut -d= -f2-)
-            NEEDS_PW_RESET=false
-            if [ -z "$DB_PW" ] || echo "$DB_PW" | grep -qi "change\|replace\|changeme"; then
-              echo "DB_PASSWORD is placeholder - generating new password"
-              NEW_PW=$(openssl rand -hex 32)
-              sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=${NEW_PW}|" .env
-              sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${NEW_PW}|" .env
-              NEEDS_PW_RESET=true
-            fi
-            # Also check POSTGRES_PASSWORD independently
-            if [ "$NEEDS_PW_RESET" != "true" ] && ([ -z "$PG_PW" ] || echo "$PG_PW" | grep -qi "change\|replace\|changeme"); then
-              echo "POSTGRES_PASSWORD is placeholder - generating new password"
-              NEW_PW=$(openssl rand -hex 32)
-              sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${NEW_PW}|" .env
-              sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=${NEW_PW}|" .env
-              NEEDS_PW_RESET=true
-            fi
-
             # Update CORS_ORIGIN to current EC2 IP
             EC2_IP=$(curl -s http://checkip.amazonaws.com 2>/dev/null | tr -d '\n')
             if [ -n "$EC2_IP" ]; then
@@ -211,63 +190,75 @@ jobs:
               docker login --username AWS --password-stdin "$ECR_REGISTRY" >/dev/null
 
             docker compose -f docker-compose.prod.yml pull
-
-            # If password was regenerated, blow away the old Postgres volume
-            # so it re-initializes with the new password.
-            # Uses 'down -v' to remove the project-prefixed volume correctly.
-            if [ "$NEEDS_PW_RESET" = "true" ]; then
-              echo "Password changed - recreating Postgres volume..."
-              docker compose -f docker-compose.prod.yml down -v
-            fi
-
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
-            # Wait for backend to become healthy (up to 2 min)
-            echo "Waiting for backend to start..."
-            BACKEND_OK=false
-            for i in $(seq 1 24); do
-              HEALTH=$(docker inspect --format='{{.State.Health.Status}}' herwell-backend-1 2>/dev/null || echo "starting")
-              if [ "$HEALTH" = "healthy" ]; then
-                echo "Backend healthy after $((i * 5)) seconds"
-                BACKEND_OK=true
-                break
-              fi
-              echo "Attempt $i: health=$HEALTH"
-              sleep 5
-            done
+            # ── Self-healing DB connectivity ───────────────────────────────
+            # Test DB connectivity with the current password.
+            # If it fails (mismatch between .env and Postgres volume),
+            # auto-fix by generating a new password and recreating the volume.
+            db_test() {
+              docker compose -f docker-compose.prod.yml exec -T backend node -e '
+                const {Pool}=require("pg");
+                const p=new Pool({
+                  host:process.env.DB_HOST||"localhost",
+                  port:parseInt(process.env.DB_PORT,10)||5432,
+                  user:process.env.DB_USER||"herwell",
+                  password:process.env.DB_PASSWORD||"",
+                  database:process.env.DB_NAME||"herwell",
+                  connectionTimeoutMillis:10000
+                });
+                p.connect().then(c=>{c.release();p.end();console.log("DB OK");process.exit(0)})
+                 .catch(e=>{console.error(e.message);p.end();process.exit(1)});
+              ' 2>&1
+            }
 
-            if [ "$BACKEND_OK" != "true" ]; then
+            wait_backend() {
+              echo "Waiting for backend to start..."
+              for i in $(seq 1 24); do
+                HEALTH=$(docker inspect --format='{{.State.Health.Status}}' herwell-backend-1 2>/dev/null || echo "starting")
+                if [ "$HEALTH" = "healthy" ]; then
+                  echo "Backend healthy after $((i * 5)) seconds"
+                  return 0
+                fi
+                echo "Attempt $i: health=$HEALTH"
+                sleep 5
+              done
               echo "Backend failed to start. Showing logs:"
               docker compose -f docker-compose.prod.yml logs backend --tail=30
               exit 1
+            }
+
+            # Wait for backend first time
+            wait_backend
+
+            # Test connectivity; if fails, regenerate password and recreate volume
+            echo "=== Testing DB connectivity ==="
+            if ! db_test; then
+              echo "DB password mismatch detected - regenerating password and recreating Postgres volume..."
+              NEW_PW=$(openssl rand -hex 32)
+              sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=${NEW_PW}|" .env
+              sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${NEW_PW}|" .env
+              echo "Generated new DB password"
+
+              # Recreate the Postgres volume with the new password
+              docker compose -f docker-compose.prod.yml down -v
+              docker compose -f docker-compose.prod.yml up -d --remove-orphans
+              wait_backend
+
+              # Test again — must pass now
+              db_test && echo "DB connectivity OK after password reset" || {
+                echo "CRITICAL: DB still unreachable after password reset!"
+                docker compose -f docker-compose.prod.yml logs db --tail=20
+                exit 1
+              }
+            else
+              echo "DB connectivity OK"
             fi
 
             docker image prune -af --filter "until=72h"
 
-            # ── Database connectivity test ────────────────────────────────
-            echo "=== Testing database connectivity ==="
-            # Copy the diagnostic script into the container and run it
+            # Copy the diagnostic script into the container for manual debugging
             docker cp ~/herwell/backend/bin/db-connectivity-test.js herwell-backend-1:/app/bin/db-connectivity-test.js 2>/dev/null || true
-            docker compose -f docker-compose.prod.yml exec -T backend node \
-              -e '
-                const {Pool} = require("pg");
-                const p = new Pool({
-                  host:     process.env.DB_HOST     || "localhost",
-                  port:     parseInt(process.env.DB_PORT, 10) || 5432,
-                  user:     process.env.DB_USER     || "herwell",
-                  password: process.env.DB_PASSWORD || "",
-                  database: process.env.DB_NAME     || "herwell",
-                  connectionTimeoutMillis: 10000,
-                });
-                p.connect().then(c => { c.release(); p.end(); console.log("DB OK"); process.exit(0); }).catch(e => { console.error("DB FAIL:", e.message); p.end(); process.exit(1); });
-              ' 2>&1 && echo "Database connectivity OK" || {
-              echo "Database connection FAILED!"
-              echo "=== db container logs ==="
-              docker compose -f docker-compose.prod.yml logs db --tail=30
-              echo "=== backend container env ==="
-              docker compose -f docker-compose.prod.yml exec -T backend node -e "console.log('DB_HOST=' + (process.env.DB_HOST||'not-set') + ' DB_PORT=' + (process.env.DB_PORT||'not-set') + ' DB_USER=' + (process.env.DB_USER||'not-set') + ' DB_NAME=' + (process.env.DB_NAME||'not-set') + ' PW_SET=' + (process.env.DB_PASSWORD?'yes':'no'))"
-              exit 1
-            }
 
             # ── Database migration ────────────────────────────────────────
             echo "=== Running database migrations ==="

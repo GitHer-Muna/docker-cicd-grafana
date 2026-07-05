@@ -37,8 +37,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout infra repo
         uses: actions/checkout@v4
+
+      # ── Checkout app source code ─────────────────────────────────
+      - name: Checkout HerWellness app code
+        uses: actions/checkout@v4
+        with:
+          repository: GitHer-Muna/HerWellness
+          path: herwellness-app
+
+      - name: Merge app code into build context
+        run: |
+          # HerWellness backend/ and frontend/ get copied into our build dirs.
+          # Our Dockerfiles and .dockerignore are preserved because
+          # the HerWellness repo doesn't have them.
+          cp -r herwellness-app/backend/* ./backend/
+          cp -r herwellness-app/frontend/* ./frontend/
 
       # ── AWS credentials ──────────────────────────────────────────
       - name: Configure AWS credentials
